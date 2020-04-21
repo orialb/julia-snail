@@ -760,13 +760,25 @@ Julia include on the tmpfile, and then deleting the file."
 
 ;;; --- eldoc implementation
 
+(defun julia-snail--is-keyword-p (identifier)
+  (seq-find `(lambda (s) (s-equals-p s ,identifier)) (julia-snail--completions-keywords)))
+
 (defun julia-snail-eldoc ()
   "Implementation for ElDoc."
   ;; TODO: Implement something reasonable. This is pretty tricky to do in a
   ;; world of generic functions, since the parser will need to do the work of
   ;; figuring out just which possible signatures of a function are being called
   ;; and display documentation accordingly.
-  nil
+
+  (let* ((identifier (julia-snail--identifier-at-point))
+         (module (julia-snail--module-at-point)))
+    (unless (julia-snail--is-keyword-p identifier)
+      (julia-snail--send-to-server
+       module
+       (format "try; join( string.(methods(%s).ms) ,\"\\n\"); catch; \"\"; end" identifier)
+       :async nil
+       :callback-failure (lambda () nil))))
+  ;; nil
 )
 
 
