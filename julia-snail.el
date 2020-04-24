@@ -55,6 +55,7 @@
   :group 'julia-snail
   :safe 'stringp
   :type 'string)
+(make-variable-buffer-local 'julia-snail-executable)
 
 (defcustom julia-snail-port 10011
   "Default Snail server port."
@@ -64,6 +65,15 @@
   :type 'integer)
 (make-variable-buffer-local 'julia-snail-port)
 
+(defcustom julia-snail-host "localhost"
+  "Default host on which the REPL and Snail server run"
+  :tag "Snail host"
+  :group 'julia-snail
+  :safe 'stringp
+  :type 'string
+  )
+(make-variable-buffer-local 'julia-snail-host)
+
 (defcustom julia-snail-repl-buffer "*julia*"
   "Default buffer to use for Julia REPL interaction."
   :tag "Julia REPL buffer"
@@ -71,6 +81,15 @@
   :safe 'stringp
   :type 'string)
 (make-variable-buffer-local 'julia-snail-buffer)
+
+(defcustom julia-snail-temp-dir small-temporary-file-directory
+  "Default directory used by Snail to create temporary
+files with Julia code to send to the server"
+  :tag "Snail temp dir"
+  :group 'julia-snail
+  :safe 'stringp
+  :type 'string)
+(make-variable-buffer-local 'julia-snail-temp-dir)
 
 (defcustom julia-snail-show-error-window t
   "When t: show compilation errors in separate window. When nil: display errors in the minibuffer."
@@ -130,6 +149,14 @@
   "Specifications for highlighting error locations.
 Uses function `compilation-shell-minor-mode'.")
 
+(defvar-local julia-snail-remote-server-file nil)
+(make-variable-buffer-local 'julia-snail-remote-server-file)
+
+(defvar julia-snail-hosts-defaults
+  `(("localhost" . (:port ,julia-snail-port
+                    :temp-dir  ,julia-snail-temp-dir
+                    :server-file ,julia-snail--server-file
+                    :executable ,julia-snail-executable))))
 
 ;;; --- pre-declarations
 
@@ -462,14 +489,18 @@ Julia include on the tmpfile, and then deleting the file."
   (let ((text (s-trim str))
         (tmpfile (make-temp-file
                   (expand-file-name "julia-tmp"
-                                    (or small-temporary-file-directory
+                                    (or julia-snail-temp-dir
                                         temporary-file-directory)))))
     (progn
       (with-temp-file tmpfile
         (insert text))
+      ;; TODO need to handle the case where the tmpfile is a TRAMP path
       (let ((reqid (julia-snail--send-to-server
                      module
-                     (format "include(\"%s\");" tmpfile)
+                     (format "include(\"%s\");" (if (tramp-tramp-file-p tmpfile)
+                                                    (tramp-file-name-localname (tramp-dissect-file-name tmpfile))
+                                                  (tmpfile)
+                                                  ))
                      :repl-buf repl-buf
                      ;; TODO: Only async via-tmp-file evaluation is currently
                      ;; supported because we rely on getting the reqid back from
@@ -827,6 +858,17 @@ Julia include on the tmpfile, and then deleting the file."
 
 ;;; --- commands
 
+;; helper functions for remote REPL support
+
+(defun julia-snail--vterm-shell ()
+  (if (s-equals? julia-snail-host "localhost")
+   (format "%s -L %s" julia-snail-executable julia-snail--server-file))
+  (format "ssh -t -L localhost:%1$s:localhost:%1$s %2$s %3$s -L %4$s"
+          julia-snail-port
+          julia-snail-host
+          julia-snail-executable
+          julia-snail-remote-server-file))
+
 ;;;###autoload
 (defun julia-snail ()
   "Start a Julia REPL and connect to it, or switch if one already exists.
@@ -843,7 +885,7 @@ To create multiple REPLs, give these variables distinct values (e.g.:
           (setf (buffer-local-value 'julia-snail--repl-go-back-target repl-buf) source-buf)
           (pop-to-buffer repl-buf))
       ;; run Julia in a vterm and load the Snail server file
-      (let* ((vterm-shell (format "%s -L %s" julia-snail-executable julia-snail--server-file))
+      (let* ((vterm-shell (julia-snail--vterm-shell))
              (vterm-buf (generate-new-buffer julia-snail-repl-buffer)))
         (with-current-buffer vterm-buf
           ;; XXX: Set the error color to red to work around breakage relating to
@@ -856,6 +898,7 @@ To create multiple REPLs, give these variables distinct values (e.g.:
             ;; INITIALIZING vterm-mode!!! Something resets buffer-local
             ;; variables in that initialization.
             (setq julia-snail-port (buffer-local-value 'julia-snail-port source-buf))
+            (setq julia-snail-temp-dir (buffer-local-value 'julia-snail-temp-dir source-buf))
             (setq julia-snail--repl-go-back-target source-buf))
           (julia-snail-repl-mode))
         (pop-to-buffer vterm-buf)))))
@@ -946,6 +989,7 @@ Currently only works on blocks terminated with `end'."
                                      "unknown")
                                    (julia-snail--construct-module-path module))))))
 
+;; TODO: make sure that this works with tramp files
 (defun julia-snail-package-activate (dir)
   "Activate a Pkg project located in DIR in the Julia REPL."
   (interactive "DProject directory: ")
