@@ -152,11 +152,8 @@ Uses function `compilation-shell-minor-mode'.")
 (defvar-local julia-snail-remote-server-file nil)
 (make-variable-buffer-local 'julia-snail-remote-server-file)
 
-(defvar julia-snail-hosts-defaults
-  `(("localhost" . (:port ,julia-snail-port
-                    :temp-dir  ,julia-snail-temp-dir
-                    :server-file ,julia-snail--server-file
-                    :executable ,julia-snail-executable))))
+(defvar julia-snail-hosts-list
+  '())
 
 ;;; --- pre-declarations
 
@@ -392,10 +389,51 @@ MAXIMUM: max timeout, ms."
   "REPL buffer minor mode cleanup."
   (julia-snail--repl-cleanup))
 
+(defun julia-snail--host-defaults (hostname)
+  "Return the default snail settings for host `hostname' or `nil' if no defaults were configured."
+  (cdr (assoc-string hostname julia-snail-hosts-list)))
+
+(defun julia-snail--current-file-host ()
+  "When current buffer is visiting a remote file via TRAMP,
+return the remote host name, else return `nil'."
+  (if (tramp-tramp-file-p buffer-file-name)
+      (tramp-file-name-host (tramp-dissect-file-name buffer-file-name))
+    nil))
+
+(defun julia-snail--current-buffer-snail-host ()
+  "Determine the Snail-server host for the current buffer. This will be given by
+`julia-snail-host' if it is buffer-local. Otherwise, return the current file hostname (remote or local)"
+  (if (local-variable-p 'julia-snail-host)
+      julia-snail-host
+    (let ((tramp-host (julia-snail--current-file-host)))
+      (if tramp-host
+          tramp-host
+        julia-snail-host)))
+  )
+
+;; TODO: The case where the current host is defined in a .dir-locals.el file is not handled here correctly
+;; because the dir-locals file is applied after `julia-snail--enable' is called.
 (defun julia-snail--enable ()
   "Source buffer minor mode initializer."
   ;; placeholder
-  nil
+    (let ((host (julia-snail--current-buffer-snail-host))
+        (config (julia-snail--host-defaults (julia-snail--current-buffer-snail-host))))
+    (when config
+      ;; not sure that `setq-local' is necessary, but when I used `setq' it
+      ;; seemed to change the global value of the variables at some point.
+      (unless (local-variable-p 'julia-snail-host)
+        (setq-local julia-snail-host host))
+      (unless (local-variable-p 'julia-snail-port)
+        (setq-local julia-snail-port (alist-get 'port config)))
+      (unless (local-variable-p 'julia-snail-executable)
+        (setq-local julia-snail-executable (alist-get 'executable config)))
+      (unless (local-variable-p 'julia-snail-repl-buffer)
+        (setq-local julia-snail-repl-buffer (alist-get 'repl-buffer config)))
+      (unless (local-variable-p 'julia-snail-remote-server-file)
+        (setq-local julia-snail-remote-server-file (alist-get 'server-file config)))
+      (unless (local-variable-p 'julia-snail-temp-dir)
+        (setq-local julia-snail-temp-dir (alist-get 'temp-dir config)))))
+    nil
   )
 
 (defun julia-snail--disable ()
