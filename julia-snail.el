@@ -682,6 +682,8 @@ Julia include on the tmpfile, and then deleting the file."
                               "xref not supported for definitions evaluated with julia-snail-send-top-level-form")))))
             response)))
 
+;; TODO: check whether xref is working with TRAMP + remote snail
+;; so far it seems that it is not working remotely, maybe filenames should be processed properly?
 (cl-defmethod xref-backend-definitions ((_backend (eql xref-julia-snail)) identifier)
   "Emacs xref API."
   (unless identifier
@@ -862,12 +864,12 @@ Julia include on the tmpfile, and then deleting the file."
 
 (defun julia-snail--vterm-shell ()
   (if (s-equals? julia-snail-host "localhost")
-   (format "%s -L %s" julia-snail-executable julia-snail--server-file))
-  (format "ssh -t -L localhost:%1$s:localhost:%1$s %2$s %3$s -L %4$s"
-          julia-snail-port
-          julia-snail-host
-          julia-snail-executable
-          julia-snail-remote-server-file))
+      (format "%s -L %s" julia-snail-executable julia-snail--server-file)
+    (format "ssh -t -L localhost:%1$s:localhost:%1$s %2$s %3$s -L %4$s"
+            julia-snail-port
+            julia-snail-host
+            julia-snail-executable
+            julia-snail-remote-server-file)))
 
 ;;;###autoload
 (defun julia-snail ()
