@@ -152,8 +152,16 @@ Uses function `compilation-shell-minor-mode'.")
 (defvar-local julia-snail-remote-server-file nil)
 (make-variable-buffer-local 'julia-snail-remote-server-file)
 
-(defvar julia-snail-hosts-list
-  '())
+(defvar julia-snail-hosts-list '()
+  "An alist containing configurations for remote hosts.
+Keys are hostnames (as strings). An entry in this alist has the following structure:
+  (HOSTNAME . ((port . DEFAULT-SNAIL-PORT)
+               (repl-buffer . REPL-BUFFER-NAME)
+               (temp-dir . path/to/dir/for/temp/snail/files)
+               (executable . path/to/remote/julia/executable)
+               (server-file . path/to/remote/JuliaSnail.jl/file/))
+The `server-file' and `temp-dir' entries must be configured, all the other entries are optional. "
+  )
 
 ;;; --- pre-declarations
 
@@ -527,12 +535,14 @@ Julia include on the tmpfile, and then deleting the file."
   (let ((text (s-trim str))
         (tmpfile (make-temp-file
                   (expand-file-name "julia-tmp"
-                                    (or julia-snail-temp-dir
-                                        temporary-file-directory)))))
+                                    (format (if (s-equals-p julia-snail-host "localhost")
+                                                "%s"
+                                              (format "/ssh:%s:%%s" julia-snail-host))
+                                        (or julia-snail-temp-dir
+                                         temporary-file-directory))))))
     (progn
       (with-temp-file tmpfile
         (insert text))
-      ;; TODO need to handle the case where the tmpfile is a TRAMP path
       (let ((reqid (julia-snail--send-to-server
                      module
                      (format "include(\"%s\");" (if (tramp-tramp-file-p tmpfile)
