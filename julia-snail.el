@@ -986,6 +986,8 @@ This will occur in the context of the Main module, just as it would at the REPL.
          (includes (julia-snail-parser-includes (current-buffer))))
     (when (or (not (buffer-modified-p))
               (y-or-n-p (format "'%s' is not saved, send to Julia anyway? " filename)))
+      (when (tramp-tramp-file-p filename)
+          (setq filename (tramp-file-name-localname (tramp-dissect-file-name filename))))
       (julia-snail--send-to-server
         module
         (format "include(\"%s\");" filename)
