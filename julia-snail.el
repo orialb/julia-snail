@@ -560,7 +560,7 @@ Julia include on the tmpfile, and then deleting the file."
                      module
                      (format "include(\"%s\");" (if (tramp-tramp-file-p tmpfile)
                                                     (tramp-file-name-localname (tramp-dissect-file-name tmpfile))
-                                                  (tmpfile)
+                                                  tmpfile
                                                   ))
                      :repl-buf repl-buf
                      ;; TODO: Only async via-tmp-file evaluation is currently
