@@ -74,6 +74,16 @@
   )
 (make-variable-buffer-local 'julia-snail-host)
 
+(defcustom julia-snail-username nil
+  "Default host on which the REPL and Snail server run"
+  :tag "username for Snail host"
+  :group 'julia-snail
+  :safe 'stringp
+  :type 'string
+  )
+(make-variable-buffer-local 'julia-snail-username)
+
+
 (defcustom julia-snail-repl-buffer "*julia*"
   "Default buffer to use for Julia REPL interaction."
   :tag "Julia REPL buffer"
@@ -429,6 +439,9 @@ return the remote host name, else return `nil'."
     (when config
       ;; not sure that `setq-local' is necessary, but when I used `setq' it
       ;; seemed to change the global value of the variables at some point.
+      (unless (local-variable-p 'julia-snail-username)
+        (setq-local julia-snail-username (alist-get 'username config)))
+      (when julia-snail-username (setq host (format "%s@%s" julia-snail-username host)))
       (unless (local-variable-p 'julia-snail-host)
         (setq-local julia-snail-host host))
       (unless (local-variable-p 'julia-snail-port)
@@ -913,11 +926,14 @@ Julia include on the tmpfile, and then deleting the file."
 (defun julia-snail--vterm-shell ()
   (if (s-equals? julia-snail-host "localhost")
       (format "%s -L %s" julia-snail-executable julia-snail--server-file)
-    (format "ssh -t -L localhost:%1$s:localhost:%1$s %2$s %3$s -L %4$s"
-            julia-snail-port
-            julia-snail-host
-            julia-snail-executable
-            julia-snail-remote-server-file)))
+    (let ((host-with-user (if julia-snail-username
+                              (format "%s@%s" julia-snail-username julia-snail-host)
+                            julia-snail-host)))
+      (format "ssh -t -L localhost:%1$s:localhost:%1$s %2$s %3$s -L %4$s"
+             julia-snail-port
+             julia-snail-host
+             julia-snail-executable
+             julia-snail-remote-server-file))))
 
 ;;;###autoload
 (defun julia-snail ()
