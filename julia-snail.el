@@ -70,8 +70,7 @@
   :tag "Snail host"
   :group 'julia-snail
   :safe 'stringp
-  :type 'string
-  )
+  :type 'string)
 (make-variable-buffer-local 'julia-snail-host)
 
 (defcustom julia-snail-username nil
@@ -79,8 +78,7 @@
   :tag "username for Snail host"
   :group 'julia-snail
   :safe 'stringp
-  :type 'string
-  )
+  :type 'string)
 (make-variable-buffer-local 'julia-snail-username)
 
 
@@ -100,6 +98,14 @@ files with Julia code to send to the server"
   :safe 'stringp
   :type 'string)
 (make-variable-buffer-local 'julia-snail-temp-dir)
+
+(defcustom julia-snail-tmux-session nil
+  "If non-nil, Snail will run inside a tmux session with this name"
+  :tag "name for Snail tmux session"
+  :group 'julia-snail
+  :safe 'stringp
+  :type 'string)
+(make-variable-buffer-local 'julia-snail-tmux-session)
 
 (defcustom julia-snail-show-error-window t
   "When t: show compilation errors in separate window. When nil: display errors in the minibuffer."
@@ -354,8 +360,10 @@ MAXIMUM: max timeout, ms."
       (kill-buffer process-buf)))
   (setq julia-snail--process nil))
 
-(defun julia-snail--repl-enable ()
-  "REPL buffer minor mode initializer."
+(defun julia-snail--repl-enable (server-started)
+  "REPL buffer minor mode initializer.
+When `server-started' is `t', the command to start the Snail server will not be sent to the REPL,
+this can be used to connect to a session with an already running server (e.g. tmux)."
   (add-hook 'kill-buffer-hook #'julia-snail--repl-cleanup nil t)
   (let ((repl-buf (current-buffer))
         (process-buf (get-buffer-create (julia-snail--process-buffer-name (current-buffer)))))
@@ -376,10 +384,11 @@ MAXIMUM: max timeout, ms."
         ;; problem and supposedly fixes it, but it does not work for me with
         ;; Julia 1.0.4.
         ;; TODO: Follow-up on https://github.com/JuliaLang/julia/issues/33752
-        (julia-snail--send-to-repl
-          (format "JuliaSnail.start(%d);" julia-snail-port)
-          :repl-buf repl-buf
-          :async nil)
+        (unless server-started
+          (julia-snail--send-to-repl
+            (format "JuliaSnail.start(%d);" julia-snail-port)
+            :repl-buf repl-buf
+            :async nil))
         ;; connect to the server
         (let ((netstream (let ((attempt 0)
                                (max-attempts 5)
@@ -434,28 +443,21 @@ return the remote host name, else return `nil'."
 (defun julia-snail--enable ()
   "Source buffer minor mode initializer."
   ;; placeholder
-    (let ((host (julia-snail--current-buffer-snail-host))
+  (let ((host (julia-snail--current-buffer-snail-host))
         (config (julia-snail--host-defaults (julia-snail--current-buffer-snail-host))))
     (when config
       ;; not sure that `setq-local' is necessary, but when I used `setq' it
       ;; seemed to change the global value of the variables at some point.
-      (unless (local-variable-p 'julia-snail-username)
-        (setq-local julia-snail-username (alist-get 'username config)))
+      (setq-local julia-snail-username (plist-get config :username))
       (when julia-snail-username (setq host (format "%s@%s" julia-snail-username host)))
-      (unless (local-variable-p 'julia-snail-host)
-        (setq-local julia-snail-host host))
-      (unless (local-variable-p 'julia-snail-port)
-        (setq-local julia-snail-port (alist-get 'port config)))
-      (unless (local-variable-p 'julia-snail-executable)
-        (setq-local julia-snail-executable (alist-get 'executable config)))
-      (unless (local-variable-p 'julia-snail-repl-buffer)
-        (setq-local julia-snail-repl-buffer (alist-get 'repl-buffer config)))
-      (unless (local-variable-p 'julia-snail-remote-server-file)
-        (setq-local julia-snail-remote-server-file (alist-get 'server-file config)))
-      (unless (local-variable-p 'julia-snail-temp-dir)
-        (setq-local julia-snail-temp-dir (alist-get 'temp-dir config)))))
-    nil
-  )
+      (setq-local julia-snail-host host)
+      (setq-local julia-snail-port (plist-get config :port))
+      (setq-local julia-snail-executable (or (plist-get config :executable) "julia"))
+      (setq-local julia-snail-repl-buffer (or (plist-get config :repl-buffer) (format "*julia@%s*" host)))
+      (setq-local julia-snail-remote-server-file (plist-get config :server-file))
+      (setq-local julia-snail-temp-dir (plist-get config :temp-dir))
+      (setq-local julia-snail-tmux-session (plist-get config :tmux-session))))
+  nil)
 
 (defun julia-snail--disable ()
   "Source buffer minor mode cleanup."
@@ -923,17 +925,27 @@ Julia include on the tmpfile, and then deleting the file."
 
 ;; helper functions for remote REPL support
 
-(defun julia-snail--vterm-shell ()
-  (if (s-equals? julia-snail-host "localhost")
-      (format "%s -L %s" julia-snail-executable julia-snail--server-file)
-    (let ((host-with-user (if julia-snail-username
-                              (format "%s@%s" julia-snail-username julia-snail-host)
-                            julia-snail-host)))
-      (format "ssh -t -L localhost:%1$s:localhost:%1$s %2$s %3$s -L %4$s"
-             julia-snail-port
-             julia-snail-host
-             julia-snail-executable
-             julia-snail-remote-server-file))))
+(defun julia-snail--vterm-shell (host jl-exec port snail-file tmux)
+  (if (s-equals? host "localhost")
+      (format "%s -L %s" jl-exec snail-file)
+    (let ((command (if tmux (format "tmux a -t %s" tmux)
+                     (format "%s -L %s" jl-exec snail-file))))
+      (format "ssh -t -L localhost:%1$s:localhost:%1$s %2$s %3$s" port host command))))
+
+(defun julia-snail--test-ssh-connection (host)
+  (message "Julia-Snail Establishing connection to %s" host)
+  (zerop (shell-command (format "ssh -o ConnectTimeout=5 -q %s exit" host))))
+
+(defun julia-snail--tmux-session-p (host session)
+  (zerop (shell-command (format "ssh %s \"tmux has-session -t %s\"" host session))))
+
+(defun julia-snail--tmux-start-snail-session (host session jl-exec port snail-file)
+  (shell-command (format "ssh -t %1$s \"tmux new-session -d -s %2$s\\; send-keys -t %2$s '%3$s -L %4$s' ENTER\\; send-keys -t %2$s 'JuliaSnail.start(%5$d)' ENTER\""
+                         host session jl-exec snail-file port)))
+
+(defun julia-snail--tmux-ensure-session (host session jl-exec port snail-file)
+  (unless (julia-snail--tmux-session-p host session)
+    (julia-snail--tmux-start-snail-session host session jl-exec port snail-file)))
 
 ;;;###autoload
 (defun julia-snail ()
@@ -951,8 +963,20 @@ To create multiple REPLs, give these variables distinct values (e.g.:
           (setf (buffer-local-value 'julia-snail--repl-go-back-target repl-buf) source-buf)
           (pop-to-buffer repl-buf))
       ;; run Julia in a vterm and load the Snail server file
-      (let* ((vterm-shell (julia-snail--vterm-shell))
-             (vterm-buf (generate-new-buffer julia-snail-repl-buffer)))
+      (let* ((host (if julia-snail-username
+                       (format "%s@%s" julia-snail-username julia-snail-host)
+                     julia-snail-host))
+             (server-file (if (s-equals-p julia-snail-host "localhost")
+                              julia-snail--server-file
+                            julia-snail-remote-server-file))
+             (vterm-buf (generate-new-buffer julia-snail-repl-buffer))
+             vterm-shell)
+        (setq vterm-shell (julia-snail--vterm-shell host julia-snail-executable julia-snail-port server-file julia-snail-tmux-session))
+        (unless (s-equals-p host "localhost")
+          (unless (julia-snail--test-ssh-connection host)
+            (error (format "Could not establish ssh connection to %s" host))))
+        (when julia-snail-tmux-session (julia-snail--tmux-ensure-session
+                                        host julia-snail-tmux-session julia-snail-executable julia-snail-port server-file ))
         (with-current-buffer vterm-buf
           ;; XXX: Set the error color to red to work around breakage relating to
           ;; some color themes and terminal combinations, see
@@ -965,6 +989,7 @@ To create multiple REPLs, give these variables distinct values (e.g.:
             ;; variables in that initialization.
             (setq julia-snail-port (buffer-local-value 'julia-snail-port source-buf))
             (setq julia-snail-temp-dir (buffer-local-value 'julia-snail-temp-dir source-buf))
+            (setq julia-snail-tmux-session (buffer-local-value 'julia-snail-tmux-session source-buf))
             (setq julia-snail--repl-go-back-target source-buf))
           (julia-snail-repl-mode))
         (pop-to-buffer vterm-buf)))))
@@ -1172,7 +1197,7 @@ turned on in REPL buffers."
   :keymap julia-snail-repl-mode-map
   (when (eq 'vterm-mode major-mode)
     (if julia-snail-repl-mode
-        (julia-snail--repl-enable)
+        (julia-snail--repl-enable julia-snail-tmux-session)
       (julia-snail--repl-disable))))
 
 (define-minor-mode julia-snail-message-buffer-mode
