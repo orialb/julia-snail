@@ -737,7 +737,10 @@ Julia include on the tmpfile, and then deleting the file."
     (mapcar (lambda (candidate)
               (let ((descr (-first-item candidate))
                     (path (-second-item candidate))
-                    (line (-third-item candidate)))
+                    (line (-third-item candidate))
+                    (tramp-host (julia-snail--current-file-host)))
+                (when tramp-host
+                  (setq path (format "/ssh:%s:%s" tramp-host path)))
                 (xref-make descr
                            (if (file-exists-p path)
                                (xref-make-file-location path line 0)
